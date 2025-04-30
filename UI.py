@@ -6,7 +6,7 @@ import gradio as gr
 import tempfile
 from llm_module import generate_text
 from tts_module import text_to_speech, get_taiwanese_voices
-from video_module import generate_video
+from video_module import generate_video, preload_models
 import time
 
 # 設置模型路徑
@@ -33,6 +33,15 @@ TTS_VOICES = {
 
 # 創建輸出目錄（如果不存在）
 os.makedirs("./outputs", exist_ok=True)
+
+# 預載入 MuseTalk 模型
+print("正在預先載入 MuseTalk 模型，請稍候...")
+models_loaded = preload_models(
+    unet_model_path=MODEL_PATHS["unet_model_path"],
+    unet_config=MODEL_PATHS["unet_config"],
+    whisper_dir=MODEL_PATHS["whisper_dir"]
+)
+print(f"MuseTalk 模型預載狀態: {'成功' if models_loaded else '失敗'}")
 
 def process_query(query, selected_template, selected_voice, progress=gr.Progress()):
     """
@@ -75,7 +84,8 @@ def process_query(query, selected_template, selected_voice, progress=gr.Progress
             output_path=video_file,
             unet_model_path=MODEL_PATHS["unet_model_path"],
             unet_config=MODEL_PATHS["unet_config"],
-            whisper_dir=MODEL_PATHS["whisper_dir"]
+            whisper_dir=MODEL_PATHS["whisper_dir"],
+            use_preloaded_models=True  # 使用預先載入的模型
         )
     except Exception as e:
         return llm_output, audio_path, f"視頻生成錯誤: {str(e)}"
@@ -90,6 +100,11 @@ def build_interface():
     with gr.Blocks(title="MuseTalk 對話視頻生成器", theme=gr.themes.Soft()) as interface:
         gr.Markdown("# MuseTalk 對話視頻生成器")
         gr.Markdown("輸入您的問題，系統將生成文本回應並創建對應的視頻")
+        
+        if models_loaded:
+            gr.Markdown("✅ MuseTalk 模型已預先載入，視頻生成速度將大幅提升")
+        else:
+            gr.Markdown("⚠️ MuseTalk 模型預載入失敗，將使用標準模式")
         
         with gr.Row():
             with gr.Column(scale=2):
@@ -150,6 +165,8 @@ def build_interface():
         3. 點擊「生成視頻」按鈕
         4. 等待系統生成文本、音頻和視頻
         5. 您可以下載生成的音頻和視頻
+        
+        💡 **優化提示**: 系統已預先載入模型，首次生成視頻後，後續處理速度會大幅提升！
         """)
         
     return interface
