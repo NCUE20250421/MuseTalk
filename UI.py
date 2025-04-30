@@ -196,29 +196,33 @@ def build_interface():
         else:
             gr.Markdown("⚠️ MuseTalk 模型預載入失敗，將使用標準模式")
         
+        # 第一行：輸入區域
         with gr.Row():
-            with gr.Column(scale=2):
-                # 輸入區域
-                query_input = gr.Textbox(
-                    label="您的問題", 
-                    placeholder="請輸入您想問的問題...",
-                    lines=3,
-                    value=""  # 清空初始值
-                )
-                with gr.Row():
-                    template_dropdown = gr.Dropdown(
-                        choices=list(VIDEO_TEMPLATES.keys()),
-                        value=list(VIDEO_TEMPLATES.keys())[0],
-                        label="選擇視頻模板"
-                    )
-                    voice_dropdown = gr.Dropdown(
-                        choices=list(TTS_VOICES.keys()),
-                        value=list(TTS_VOICES.keys())[0],
-                        label="選擇語音"
-                    )
-                submit_btn = gr.Button("生成視頻", variant="primary")
-            
-            with gr.Column(scale=3):
+            query_input = gr.Textbox(
+                label="您的問題", 
+                placeholder="請輸入您想問的問題...",
+                lines=3,
+                value=""  # 清空初始值
+            )
+        
+        # 第二行：選項和提交按鈕
+        with gr.Row():
+            template_dropdown = gr.Dropdown(
+                choices=list(VIDEO_TEMPLATES.keys()),
+                value=list(VIDEO_TEMPLATES.keys())[0],
+                label="選擇視頻模板"
+            )
+            voice_dropdown = gr.Dropdown(
+                choices=list(TTS_VOICES.keys()),
+                value=list(TTS_VOICES.keys())[0],
+                label="選擇語音"
+            )
+            submit_btn = gr.Button("生成視頻", variant="primary")
+        
+        # 第三行：輸出區域 - AI文本和音頻在左側，視頻在右側
+        with gr.Row():
+            # 左側：文本和音頻
+            with gr.Column(scale=1):
                 # 輸出區域 - 預設顯示歡迎內容
                 welcome_text_with_time = f"歡迎使用數位司儀系統\n\n[TTS 耗時: {format_time(welcome_tts_time)}]\n[視頻生成耗時: {format_time(welcome_video_time)}]"
                 llm_output = gr.Textbox(
@@ -230,13 +234,16 @@ def build_interface():
                     label="生成的音頻",
                     value=welcome_audio if welcome_audio else None
                 )
+                
+                # 添加耗時統計圖表
+                time_stats = gr.Json(label="處理耗時統計", visible=False)
+                
+            # 右側：視頻
+            with gr.Column(scale=1):
                 video_output = gr.Video(
                     label="生成的視頻",
                     value=welcome_video if welcome_video else None
                 )
-                
-                # 添加耗時統計圖表
-                time_stats = gr.Json(label="處理耗時統計 (秒)", visible=False)
         
         # 處理提交
         submit_btn.click(
