@@ -1,15 +1,6 @@
 # main.py
 # This script integrates the LLM, TTS, and video generation modules to create a complete pipeline.
 
-'''
-python main.py --input "請介紹一下台灣夜市文化" --tts_voice "zh-TW-YunJheNeural"
-
-python main.py --skip_llm --input "台灣是一個美食天堂，夜市小吃特別有名" --tts_voice "zh-TW-HsiaoChenNeural"
-
-python main.py --skip_llm --skip_tts --audio_file "path/to/your/audio.mp3" --video_reference "assets/demo/sun1/sun.png"
-'''
-
-
 import os
 import argparse
 from llm_module import generate_text
@@ -26,6 +17,15 @@ def main():
     parser.add_argument('--video_reference', type=str, help='Path to reference video/image', default="data/video/sun.mp4")
     parser.add_argument('--output_dir', type=str, help='Output directory', default="./outputs")
     parser.add_argument('--tts_voice', type=str, help='TTS voice to use', default="zh-TW-HsiaoChenNeural")
+    
+    # MuseTalk specific arguments
+    parser.add_argument('--unet_model_path', type=str, default="./models/musetalkV15/unet.pth", help="Path to UNet model weights")
+    parser.add_argument('--unet_config', type=str, default="./models/musetalkV15/musetalk.json", help="Path to UNet configuration file")
+    parser.add_argument('--whisper_dir', type=str, default="./models/whisper", help="Directory containing Whisper model")
+    parser.add_argument('--fps', type=int, default=25, help="Video frames per second")
+    parser.add_argument('--extra_margin', type=int, default=10, help="Extra margin for face cropping")
+    parser.add_argument('--batch_size', type=int, default=8, help="Batch size for video generation")
+    
     args = parser.parse_args()
     
     # Create output directory if it doesn't exist
@@ -71,15 +71,15 @@ def main():
             audio_file=audio_file,
             video_path=args.video_reference,
             bbox_shift=0,
-            extra_margin=10
+            extra_margin=args.extra_margin,
+            output_path=output_video_path,
+            fps=args.fps,
+            batch_size=args.batch_size,
+            unet_model_path=args.unet_model_path,
+            unet_config=args.unet_config,
+            whisper_dir=args.whisper_dir
         )
         print(f"Video file generated: {video_file}")
-        
-        # Move the video file to output directory if needed
-        if video_file != output_video_path:
-            import shutil
-            shutil.move(video_file, output_video_path)
-            print(f"Video moved to: {output_video_path}")
             
         print("Processing completed successfully!")
         

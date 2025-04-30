@@ -1,37 +1,34 @@
-import os
-import cv2
-import torch
-import numpy as np
-from tqdm import tqdm
-from transformers import WhisperModel
-from musetalk.utils.audio_processor import AudioProcessor
-from musetalk.utils.utils import load_all_model, datagen
-from musetalk.utils.face_parsing import FaceParsing
-from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs
-
 # video_module.py
-# This module handles video generation synchronized with audio.
+# This module handles video generation synchronized with audio using MuseTalk's native services.
 
-class ModelPaths:
-    """Default model paths that can be overridden"""
-    UNET_MODEL = "./models/musetalkV15/unet.pth"
-    UNET_CONFIG = "./models/musetalkV15/musetalk.json"
-    WHISPER_MODEL = "./models/whisper"
-    VAE_TYPE = "sd-vae"
+import os
+import sys
+import subprocess
+import yaml
+import tempfile
+from omegaconf import OmegaConf
 
-def generate_video(audio_file, video_path, bbox_shift=0, extra_margin=10, 
-                  model_paths=None, output_path="output_video.mp4", fps=25):
+def generate_video(audio_file, video_path, bbox_shift=0, extra_margin=10,
+                   output_path="output_video.mp4", fps=25, batch_size=8,
+                   unet_model_path="./models/musetalkV15/unet.pth",
+                   unet_config="./models/musetalkV15/musetalk.json",
+                   whisper_dir="./models/whisper",
+                   version="v15"):
     """
-    Generate lip-synced video using MuseTalk based on input audio.
+    Generate lip-synced video using MuseTalk's native realtime_inference service.
     
     Args:
         audio_file (str): Path to the input audio file
         video_path (str): Path to the input video/image file or directory
         bbox_shift (int): Bounding box shift value for face detection
         extra_margin (int): Extra margin for face cropping
-        model_paths (ModelPaths, optional): Model paths to use
-        output_path (str, optional): Path to save the output video
-        fps (int, optional): Frames per second for the output video
+        output_path (str): Path to save the output video
+        fps (int): Frames per second for the output video
+        batch_size (int): Batch size for inference
+        unet_model_path (str): Path to UNet model weights
+        unet_config (str): Path to UNet configuration file
+        whisper_dir (str): Directory containing Whisper model
+        version (str): Version of MuseTalk ("v1" or "v15")
         
     Returns:
         str: Path to the generated video file
@@ -41,113 +38,126 @@ def generate_video(audio_file, video_path, bbox_shift=0, extra_margin=10,
     
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video/image path not found: {video_path}")
+
+    # Create a temporary YAML config file for the inference
+    temp_dir = tempfile.mkdtemp()
+    temp_config_path = os.path.join(temp_dir, "temp_inference_config.yaml")
     
-    # Set default model paths if not provided
-    if model_paths is None:
-        model_paths = ModelPaths()
+    # Set avatar ID to be unique based on timestamp
+    import time
+    avatar_id = f"temp_avatar_{int(time.time())}"
     
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # Create directory for results
+    result_dir = os.path.dirname(output_path)
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir)
+    
+    # Prepare config content
+    config_content = {
+        avatar_id: {
+            "preparation": True,
+            "video_path": video_path,
+            "bbox_shift": bbox_shift,
+            "audio_clips": {
+                "output": audio_file
+            }
+        }
+    }
+    
+    # Write config to file
+    with open(temp_config_path, 'w') as f:
+        yaml.dump(config_content, f)
+    
+    print(f"Created temporary inference config at: {temp_config_path}")
+    
+    # Determine output video path
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    output_name = os.path.splitext(os.path.basename(output_path))[0]
+    
+    # Check if ffmpeg is in PATH, if not, try to find it
+    ffmpeg_path = get_ffmpeg_path()
+    
+    # Build command for realtime_inference.py
+    cmd = [
+        sys.executable,
+        "-m", "scripts.realtime_inference",
+        "--inference_config", temp_config_path,
+        "--result_dir", output_dir,
+        "--unet_model_path", unet_model_path,
+        "--unet_config", unet_config,
+        "--version", version,
+        "--fps", str(fps),
+        "--batch_size", str(batch_size),
+        "--extra_margin", str(extra_margin),
+        "--output_vid_name", output_name,
+        "--whisper_dir", whisper_dir
+    ]
+    
+    if ffmpeg_path:
+        cmd.extend(["--ffmpeg_path", ffmpeg_path])
+    
+    # Run the command
+    print("Running MuseTalk realtime inference...")
+    print(" ".join(cmd))
     
     try:
-        # Load models
-        print("Loading models...")
-        vae, unet, pe = load_all_model(
-            unet_model_path=model_paths.UNET_MODEL,
-            vae_type=model_paths.VAE_TYPE, 
-            unet_config=model_paths.UNET_CONFIG,
-            device=device
-        )
+        subprocess.run(cmd, check=True)
         
-        # Initialize audio processor and Whisper model
-        print("Initializing audio processor...")
-        audio_processor = AudioProcessor(feature_extractor_path=model_paths.WHISPER_MODEL)
-        whisper = WhisperModel.from_pretrained(model_paths.WHISPER_MODEL)
-        whisper = whisper.to(device=device).eval()
-        
-        # Extract audio features
-        print("Extracting audio features...")
-        whisper_input_features, librosa_length = audio_processor.get_audio_feature(audio_file)
-        whisper_chunks = audio_processor.get_whisper_chunk(
-            whisper_input_features,
-            device,
-            whisper.dtype,
-            whisper,
-            librosa_length,
-            fps=fps
-        )
-        
-        # Process input images
-        print("Processing input images...")
-        if os.path.isfile(video_path):
-            input_img_list = [video_path]
+        # Determine the output file path from MuseTalk's convention
+        if version == "v15":
+            musetalk_output = os.path.join(output_dir, "v15", "avatars", avatar_id, "vid_output", f"{output_name}.mp4")
         else:
-            input_img_list = [os.path.join(video_path, f) for f in os.listdir(video_path) 
-                             if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-            if not input_img_list:
-                raise ValueError(f"No image files found in directory: {video_path}")
+            musetalk_output = os.path.join(output_dir, "avatars", avatar_id, "vid_output", f"{output_name}.mp4")
         
-        # Get face landmarks and bounding boxes
-        print("Detecting face landmarks...")
-        coord_list, frame_list = get_landmark_and_bbox(input_img_list, bbox_shift)
-        
-        # Initialize face parser
-        fp = FaceParsing()
-        
-        # Process frames
-        print("Processing frames...")
-        input_latent_list = []
-        for bbox, frame in zip(coord_list, frame_list):
-            x1, y1, x2, y2 = bbox
-            y2 = y2 + extra_margin
-            y2 = min(y2, frame.shape[0])
-            crop_frame = frame[y1:y2, x1:x2]
-            crop_frame = cv2.resize(crop_frame, (256, 256))
-            latents = vae.get_latents_for_unet(crop_frame)
-            input_latent_list.append(latents)
-        
-        # Smooth first and last frames for transition
-        input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
-        
-        # Generate lip-synced frames
-        timesteps = torch.tensor([0], device=device)
-        video_num = len(whisper_chunks)
-        batch_size = 8
-        
-        print(f"Generating {video_num} frames...")
-        gen = datagen(
-            whisper_chunks=whisper_chunks,
-            vae_encode_latents=input_latent_list_cycle,
-            batch_size=batch_size,
-            device=device
-        )
-        
-        result_frames = []
-        for whisper_batch, latent_batch in tqdm(gen):
-            audio_feature_batch = pe(whisper_batch)
-            latent_batch = latent_batch.to(dtype=unet.dtype)
-            
-            pred_latents = unet.model(latent_batch, timesteps, encoder_hidden_states=audio_feature_batch).sample
-            recon = vae.decode_latents(pred_latents)
-            result_frames.extend(recon)
-        
-        # Save output video
-        print(f"Saving video to {output_path}...")
-        
-        # Use OpenCV VideoWriter to save the video
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, float(fps), (256, 256))
-        
-        for frame in result_frames:
-            frame = (frame * 255).astype(np.uint8)
-            out.write(frame)
-        
-        out.release()
-        print("Video generation completed successfully!")
-        
-        return output_path
-        
-    except Exception as e:
-        print(f"Error during video generation: {str(e)}")
+        # Check if the output file exists
+        if os.path.exists(musetalk_output):
+            # Copy the file to the desired output path if different
+            if musetalk_output != output_path:
+                import shutil
+                shutil.copy(musetalk_output, output_path)
+                print(f"Video file copied from {musetalk_output} to {output_path}")
+            return output_path
+        else:
+            # If the file wasn't found at the expected location, try to find it
+            import glob
+            possible_outputs = glob.glob(os.path.join(output_dir, "**", f"{output_name}.mp4"), recursive=True)
+            if possible_outputs:
+                if possible_outputs[0] != output_path:
+                    import shutil
+                    shutil.copy(possible_outputs[0], output_path)
+                    print(f"Video file copied from {possible_outputs[0]} to {output_path}")
+                return output_path
+            else:
+                raise FileNotFoundError(f"Could not find generated video file from MuseTalk")
+    
+    except subprocess.CalledProcessError as e:
+        print(f"Error running MuseTalk realtime inference: {e}")
         raise
+    finally:
+        # Clean up temporary files
+        try:
+            import shutil
+            shutil.rmtree(temp_dir)
+        except:
+            pass
+
+def get_ffmpeg_path():
+    """Attempts to find the ffmpeg executable path"""
+    # First check if ffmpeg is in PATH
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        return None  # No need for explicit path if it's in PATH
+    except:
+        # Try common locations
+        common_paths = [
+            "ffmpeg-master-latest-win64-gpl-shared\\bin",
+            "ffmpeg-4.4-amd64-static",
+            "ffmpeg"
+        ]
+        
+        for path in common_paths:
+            if os.path.exists(path):
+                if os.path.exists(os.path.join(path, "ffmpeg")) or os.path.exists(os.path.join(path, "ffmpeg.exe")):
+                    return os.path.abspath(path)
+        
+        return None  # Could not find ffmpeg
