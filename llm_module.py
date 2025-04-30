@@ -3,17 +3,19 @@
 
 import os
 import torch
+import re
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 class LLMConfig:
     """Configuration for the LLM module"""
     MODEL_NAME = "Qwen/Qwen-7B"
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    MAX_LENGTH = 1024
+    MAX_LENGTH = 512  # 減少最大長度以產生更簡短的回答
     TEMPERATURE = 0.7
     TOP_P = 0.9
+    # 修改提示模板，讓模型知道我們需要簡短對話式的回答
     DEFAULT_PROMPT_TEMPLATE = """Human: {input_text}
-Assistant: """
+Assistant: 請用簡短的一兩句話回答，像對話一樣。"""
 
 # Initialize tokenizer and model
 def initialize_model(model_name=None):
@@ -52,6 +54,32 @@ def get_model_and_tokenizer():
         _tokenizer, _model = initialize_model()
     return _tokenizer, _model
 
+def extract_first_sentence(text):
+    """
+    從文本中提取第一個完整的句子。
+    
+    Args:
+        text (str): 輸入文本。
+        
+    Returns:
+        str: 提取的第一個句子，如果沒有找到句子則返回原文本。
+    """
+    # 定義中文和英文的句子結束標記
+    sentence_endings = r'[。！？!?;；]'
+    
+    # 查找第一個句子
+    match = re.search(f'(.+?{sentence_endings})', text)
+    if match:
+        return match.group(1).strip()
+    
+    # 如果沒找到句號等結束標記，則返回第一行文本
+    lines = text.split('\n')
+    if lines and lines[0].strip():
+        return lines[0].strip()
+    
+    # 最後退回到返回原始文本
+    return text.strip()
+
 def generate_text(input_text, prompt_template=None, max_length=None, temperature=None, top_p=None):
     """
     Generates text using the Qwen model and extracts only the Assistant's response.
@@ -69,7 +97,7 @@ def generate_text(input_text, prompt_template=None, max_length=None, temperature
     tokenizer, model = get_model_and_tokenizer()
     
     if tokenizer is None or model is None:
-        return "Model initialization failed. Please check the error logs."
+        return "模型初始化失敗，請檢查錯誤日誌。"
     
     try:
         # Use default values if not provided
@@ -98,16 +126,23 @@ def generate_text(input_text, prompt_template=None, max_length=None, temperature
         # Extract only the Assistant's response
         if "Assistant:" in generated_text:
             assistant_response = generated_text.split("Assistant:", 1)[1].strip()
-            return assistant_response
         else:
             # If we can't find the Assistant marker, return the text after the input
             # This is a fallback for models with different formats
             if input_text in generated_text:
-                return generated_text.split(input_text, 1)[1].strip()
-            
-            # Final fallback: return everything
-            return generated_text
+                assistant_response = generated_text.split(input_text, 1)[1].strip()
+            else:
+                # Final fallback: return everything
+                assistant_response = generated_text
+        
+        # 清除提示中的指令
+        assistant_response = assistant_response.replace("請用簡短的一兩句話回答，像對話一樣。", "")
+        
+        # 提取第一個完整句子作為回答
+        first_sentence = extract_first_sentence(assistant_response)
+        
+        return first_sentence
     
     except Exception as e:
         print(f"Error generating text: {str(e)}")
-        return "我無法處理您的請求，發生了錯誤。請稍後再試。"
+        return "我無法處理您的請求，發生了錯誤。"
