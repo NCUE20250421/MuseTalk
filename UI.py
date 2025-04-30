@@ -43,6 +43,45 @@ models_loaded = preload_models(
 )
 print(f"MuseTalk 模型預載狀態: {'成功' if models_loaded else '失敗'}")
 
+# 生成歡迎語音和視頻
+def generate_welcome_assets():
+    """
+    生成歡迎語音和視頻，用於系統預熱
+    """
+    print("正在生成歡迎語音和視頻...")
+    welcome_text = "歡迎使用數位司儀系統"
+    welcome_audio_path = "./outputs/welcome_audio.mp3"
+    welcome_video_path = "./outputs/welcome_video.mp4"
+    
+    # 生成歡迎語音
+    try:
+        audio_path = text_to_speech(
+            text=welcome_text,
+            output_file=welcome_audio_path,
+            voice="zh-TW-HsiaoChenNeural"  # 使用女性聲音
+        )
+        print(f"歡迎語音生成成功: {audio_path}")
+        
+        # 如果模型已預載，生成歡迎視頻
+        if models_loaded:
+            # 使用孫燕姿模板生成歡迎視頻
+            video_template = VIDEO_TEMPLATES["孫燕姿"]
+            video_path = generate_video(
+                audio_file=audio_path,
+                video_path=video_template,
+                output_path=welcome_video_path,
+                use_preloaded_models=True  # 使用預先載入的模型
+            )
+            print(f"歡迎視頻生成成功: {video_path}")
+            return audio_path, video_path
+        return audio_path, None
+    except Exception as e:
+        print(f"歡迎資源生成失敗: {e}")
+        return None, None
+
+# 生成歡迎資源
+welcome_audio, welcome_video = generate_welcome_assets()
+
 def process_query(query, selected_template, selected_voice, progress=gr.Progress()):
     """
     處理用户查詢的完整流程：LLM → TTS → 視頻生成
@@ -97,14 +136,24 @@ def build_interface():
     """
     構建 Gradio 界面
     """
-    with gr.Blocks(title="MuseTalk 對話視頻生成器", theme=gr.themes.Soft()) as interface:
-        gr.Markdown("# MuseTalk 對話視頻生成器")
+    with gr.Blocks(title="MuseTalk 數位司儀系統", theme=gr.themes.Soft()) as interface:
+        gr.Markdown("# MuseTalk 數位司儀系統")
         gr.Markdown("輸入您的問題，系統將生成文本回應並創建對應的視頻")
         
         if models_loaded:
             gr.Markdown("✅ MuseTalk 模型已預先載入，視頻生成速度將大幅提升")
         else:
             gr.Markdown("⚠️ MuseTalk 模型預載入失敗，將使用標準模式")
+        
+        # 顯示歡迎語音和視頻（如果生成成功）
+        if welcome_audio or welcome_video:
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### 系統歡迎")
+                    if welcome_audio:
+                        gr.Audio(welcome_audio, label="歡迎語音")
+                    if welcome_video:
+                        gr.Video(welcome_video, label="歡迎視頻")
         
         with gr.Row():
             with gr.Column(scale=2):
