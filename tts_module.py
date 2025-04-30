@@ -4,12 +4,42 @@
 import asyncio
 import edge_tts
 import os
+import re
+
+def preprocess_text(text):
+    """
+    預處理文本，移除 "Assistant:" 和 "Human:" 標記及其後面的內容。
+    還會清理多餘的空白行和格式化問題。
+
+    Args:
+        text (str): 輸入的文本
+
+    Returns:
+        str: 處理後的文本
+    """
+    # 移除 "Assistant:" 和 "Human:" 標記
+    text = re.sub(r'^\s*Assistant:\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*Human:\s*', '', text, flags=re.MULTILINE)
+    
+    # 移除可能存在的 Markdown 代碼塊標記
+    text = re.sub(r'```[\w]*\n|```\n?', '', text)
+    
+    # 合併連續的空行為一個空行
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    
+    # 去除開頭和結尾的空白
+    text = text.strip()
+    
+    return text
 
 async def _text_to_speech_async(text, output_file="output_audio.mp3", voice="zh-TW-HsiaoChenNeural", rate="+0%", volume="+0%"):
     """
     Asynchronous function to convert text to speech using EdgeTTS.
     """
-    communicate = edge_tts.Communicate(text, voice, rate=rate, volume=volume)
+    # 預處理文本，移除 Assistant: 和 Human: 標記
+    cleaned_text = preprocess_text(text)
+    
+    communicate = edge_tts.Communicate(cleaned_text, voice, rate=rate, volume=volume)
     await communicate.save(output_file)
 
 def text_to_speech(text, output_file="output_audio.mp3", voice="zh-TW-HsiaoChenNeural", rate="+0%", volume="+0%"):
