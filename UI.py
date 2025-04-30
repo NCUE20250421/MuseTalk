@@ -101,6 +101,11 @@ def process_query(query, selected_template, selected_voice, progress=gr.Progress
     progress(1.0, "處理完成!")
     return results
 
+# 輔助函數：將顯示名稱轉換為實際的 TTS 語音 ID
+def get_tts_voice_id(display_name):
+    """將顯示名稱轉換為 TTS 語音 ID"""
+    return TTS_VOICES[display_name]
+
 def build_interface():
     """
     構建 Gradio 界面
@@ -142,7 +147,8 @@ def build_interface():
             inputs=[
                 query_input,
                 template_dropdown,
-                gr.State(lambda x: TTS_VOICES[x])(voice_dropdown)
+                # 修正：直接在處理函數中轉換語音 ID
+                voice_dropdown
             ],
             outputs={
                 "llm_output": llm_output,
