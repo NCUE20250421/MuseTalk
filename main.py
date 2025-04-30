@@ -1,6 +1,15 @@
 # main.py
 # This script integrates the LLM, TTS, and video generation modules to create a complete pipeline.
 
+'''
+python main.py --input "請介紹一下台灣夜市文化" --tts_voice "zh-TW-YunJheNeural"
+
+python main.py --skip_llm --input "台灣是一個美食天堂，夜市小吃特別有名" --tts_voice "zh-TW-HsiaoChenNeural"
+
+python main.py --skip_llm --skip_tts --audio_file "path/to/your/audio.mp3" --video_reference "assets/demo/sun1/sun.png"
+'''
+
+
 import os
 import argparse
 from llm_module import generate_text
