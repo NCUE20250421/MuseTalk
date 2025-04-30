@@ -1,33 +1,113 @@
 # llm_module.py
 # This module handles text generation using a large language model (LLM).
 
+import os
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Load Qwen model and tokenizer
-model_name = "Qwen/Qwen-7B"
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+class LLMConfig:
+    """Configuration for the LLM module"""
+    MODEL_NAME = "Qwen/Qwen-7B"
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    MAX_LENGTH = 1024
+    TEMPERATURE = 0.7
+    TOP_P = 0.9
+    DEFAULT_PROMPT_TEMPLATE = """Human: {input_text}
+Assistant: """
 
-# Modify the generate_text function to return only the Assistant's response
+# Initialize tokenizer and model
+def initialize_model(model_name=None):
+    """
+    Initialize the LLM model and tokenizer.
 
-def generate_text(input_text):
+    Args:
+        model_name (str, optional): Name or path of the model to load. Defaults to LLMConfig.MODEL_NAME.
+
+    Returns:
+        tuple: (tokenizer, model) or (None, None) if initialization fails
+    """
+    try:
+        print(f"Loading model: {model_name or LLMConfig.MODEL_NAME}")
+        model_name = model_name or LLMConfig.MODEL_NAME
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, 
+            trust_remote_code=True, 
+            device_map=LLMConfig.DEVICE
+        )
+        print(f"Model loaded successfully on {LLMConfig.DEVICE}")
+        return tokenizer, model
+    except Exception as e:
+        print(f"Error initializing model: {str(e)}")
+        return None, None
+
+# Lazy loading of model and tokenizer
+_tokenizer = None
+_model = None
+
+def get_model_and_tokenizer():
+    """Get or initialize model and tokenizer"""
+    global _tokenizer, _model
+    if _tokenizer is None or _model is None:
+        _tokenizer, _model = initialize_model()
+    return _tokenizer, _model
+
+def generate_text(input_text, prompt_template=None, max_length=None, temperature=None, top_p=None):
     """
     Generates text using the Qwen model and extracts only the Assistant's response.
 
     Args:
         input_text (str): The input text provided by the user.
+        prompt_template (str, optional): Custom prompt template to use.
+        max_length (int, optional): Maximum length of generated text.
+        temperature (float, optional): Temperature for sampling.
+        top_p (float, optional): Top-p sampling parameter.
 
     Returns:
         str: The Assistant's response extracted from the generated text, or a default response if extraction fails.
     """
-    inputs = tokenizer(input_text, return_tensors="pt")
-    outputs = model.generate(**inputs, max_length=100)
-    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # Extract only the Assistant's response
-    if "Assistant:" in generated_text:
-        assistant_response = generated_text.split("Assistant:", 1)[1].strip()
-        return assistant_response
-    else:
-        # Return a default meaningful response
-        return "I'm sorry, I couldn't understand your request. Could you please rephrase it?"
+    tokenizer, model = get_model_and_tokenizer()
+    
+    if tokenizer is None or model is None:
+        return "Model initialization failed. Please check the error logs."
+    
+    try:
+        # Use default values if not provided
+        prompt_template = prompt_template or LLMConfig.DEFAULT_PROMPT_TEMPLATE
+        max_length = max_length or LLMConfig.MAX_LENGTH
+        temperature = temperature or LLMConfig.TEMPERATURE
+        top_p = top_p or LLMConfig.TOP_P
+        
+        # Format the prompt with the input text
+        prompt = prompt_template.format(input_text=input_text)
+        
+        # Tokenize the input
+        inputs = tokenizer(prompt, return_tensors="pt").to(LLMConfig.DEVICE)
+        
+        # Generate text
+        outputs = model.generate(
+            **inputs, 
+            max_length=max_length,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        
+        # Decode the generated text
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Extract only the Assistant's response
+        if "Assistant:" in generated_text:
+            assistant_response = generated_text.split("Assistant:", 1)[1].strip()
+            return assistant_response
+        else:
+            # If we can't find the Assistant marker, return the text after the input
+            # This is a fallback for models with different formats
+            if input_text in generated_text:
+                return generated_text.split(input_text, 1)[1].strip()
+            
+            # Final fallback: return everything
+            return generated_text
+    
+    except Exception as e:
+        print(f"Error generating text: {str(e)}")
+        return "我無法處理您的請求，發生了錯誤。請稍後再試。"

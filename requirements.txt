@@ -18,3 +18,7 @@ imageio[ffmpeg]
 omegaconf
 ffmpeg-python
 moviepy
+
+# 新增的依賴
+edge-tts>=6.1.9
+asyncio
