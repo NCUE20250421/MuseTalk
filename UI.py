@@ -38,23 +38,15 @@ def process_query(query, selected_template, selected_voice, progress=gr.Progress
     """
     處理用户查詢的完整流程：LLM → TTS → 視頻生成
     """
-    results = {
-        "llm_output": "",
-        "audio_path": "",
-        "video_path": ""
-    }
+    # 獲取實際的 TTS 語音 ID
+    voice_id = TTS_VOICES[selected_voice]
     
     # 步驟 1: 使用 LLM 生成文本
     progress(0.1, "使用 LLM 生成回應中...")
     try:
         llm_output = generate_text(query)
-        results["llm_output"] = llm_output
     except Exception as e:
-        return {
-            "llm_output": f"LLM 錯誤: {str(e)}",
-            "audio_path": None,
-            "video_path": None
-        }
+        return f"LLM 錯誤: {str(e)}", None, None
     
     # 步驟 2: 使用 TTS 生成音頻
     progress(0.3, "將文本轉換為語音中...")
@@ -64,15 +56,10 @@ def process_query(query, selected_template, selected_voice, progress=gr.Progress
         audio_path = text_to_speech(
             text=llm_output,
             output_file=audio_file,
-            voice=selected_voice
+            voice=voice_id
         )
-        results["audio_path"] = audio_path
     except Exception as e:
-        return {
-            "llm_output": results["llm_output"],
-            "audio_path": f"TTS 錯誤: {str(e)}",
-            "video_path": None
-        }
+        return llm_output, f"TTS 錯誤: {str(e)}", None
     
     # 步驟 3: 生成視頻
     progress(0.6, "生成嘴型同步視頻中...")
@@ -90,21 +77,11 @@ def process_query(query, selected_template, selected_voice, progress=gr.Progress
             unet_config=MODEL_PATHS["unet_config"],
             whisper_dir=MODEL_PATHS["whisper_dir"]
         )
-        results["video_path"] = video_path
     except Exception as e:
-        return {
-            "llm_output": results["llm_output"],
-            "audio_path": results["audio_path"],
-            "video_path": f"視頻生成錯誤: {str(e)}"
-        }
+        return llm_output, audio_path, f"視頻生成錯誤: {str(e)}"
     
     progress(1.0, "處理完成!")
-    return results
-
-# 輔助函數：將顯示名稱轉換為實際的 TTS 語音 ID
-def get_tts_voice_id(display_name):
-    """將顯示名稱轉換為 TTS 語音 ID"""
-    return TTS_VOICES[display_name]
+    return llm_output, audio_path, video_path
 
 def build_interface():
     """
@@ -141,20 +118,19 @@ def build_interface():
                 audio_output = gr.Audio(label="生成的音頻")
                 video_output = gr.Video(label="生成的視頻")
         
-        # 處理提交
+        # 處理提交 - 修正輸出格式
         submit_btn.click(
             fn=process_query,
             inputs=[
                 query_input,
                 template_dropdown,
-                # 修正：直接在處理函數中轉換語音 ID
                 voice_dropdown
             ],
-            outputs={
-                "llm_output": llm_output,
-                "audio_path": audio_output, 
-                "video_path": video_output
-            }
+            outputs=[
+                llm_output,
+                audio_output, 
+                video_output
+            ]
         )
         
         # 範例
