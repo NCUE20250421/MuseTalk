@@ -16,7 +16,13 @@ def main():
     # print(f"Audio file generated: {audio_file}")
 
     # Step 3: Generate video synchronized with audio
-    video_file = generate_video("data\audio\10sec.wav")
+    video_file = generate_video(
+        audio_file="data\audio\10sec.wav",  # 輸入音檔路徑
+        video_path="data\video\sun.mp4",  # 輸入影片或圖片路徑
+        bbox_shift=0,  # 調整臉部檢測框的偏移量
+        extra_margin=10  # 調整臉部裁剪的額外邊距
+    )
+    #video_file = generate_video("data\audio\10sec.wav")
     print(f"Video file generated: {video_file}")
 
 if __name__ == "__main__":
