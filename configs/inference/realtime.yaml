@@ -3,8 +3,9 @@ avator_1:
  bbox_shift: 5
  video_path: "data/video/sun.mp4"
  audio_clips:
-     audio_0: "data/audio/yongen.wav"
-     audio_1: "data/audio/eng.wav"
+     audio_0: "data/audio/10sec.wav"
+    # audio_1: "data/audio/eng.wav"
  
   
+
 
