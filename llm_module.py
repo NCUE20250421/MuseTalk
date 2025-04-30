@@ -10,12 +10,13 @@ class LLMConfig:
     """Configuration for the LLM module"""
     MODEL_NAME = "Qwen/Qwen-7B"
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    MAX_LENGTH = 512  # 減少最大長度以產生更簡短的回答
-    TEMPERATURE = 0.7
-    TOP_P = 0.9
-    # 修改提示模板，讓模型知道我們需要簡短對話式的回答
+    MAX_LENGTH = 300  # 減少最大長度以產生更簡短的回答
+    TEMPERATURE = 0.8  # 增加溫度參數，讓生成更加多樣化
+    TOP_P = 0.85
+    MAX_WORDS = 30  # 最大字數限制
+    # 修改提示模板，更強調簡短回答
     DEFAULT_PROMPT_TEMPLATE = """Human: {input_text}
-Assistant: 請用簡短的一兩句話回答，像對話一樣。"""
+Assistant: 請用一句簡短的對話語氣回答，不要超過二十個字。"""
 
 # Initialize tokenizer and model
 def initialize_model(model_name=None):
@@ -56,7 +57,7 @@ def get_model_and_tokenizer():
 
 def extract_first_sentence(text):
     """
-    從文本中提取第一個完整的句子。
+    從文本中提取第一個完整的句子，並確保不超過指定字數。
     
     Args:
         text (str): 輸入文本。
@@ -70,15 +71,26 @@ def extract_first_sentence(text):
     # 查找第一個句子
     match = re.search(f'(.+?{sentence_endings})', text)
     if match:
-        return match.group(1).strip()
+        sentence = match.group(1).strip()
+        # 確保不超過最大字數
+        if len(sentence) > LLMConfig.MAX_WORDS:
+            return sentence[:LLMConfig.MAX_WORDS] + "..."
+        return sentence
     
     # 如果沒找到句號等結束標記，則返回第一行文本
     lines = text.split('\n')
     if lines and lines[0].strip():
-        return lines[0].strip()
+        first_line = lines[0].strip()
+        # 確保不超過最大字數
+        if len(first_line) > LLMConfig.MAX_WORDS:
+            return first_line[:LLMConfig.MAX_WORDS] + "..."
+        return first_line
     
     # 最後退回到返回原始文本
-    return text.strip()
+    text = text.strip()
+    if len(text) > LLMConfig.MAX_WORDS:
+        return text[:LLMConfig.MAX_WORDS] + "..."
+    return text
 
 def generate_text(input_text, prompt_template=None, max_length=None, temperature=None, top_p=None):
     """
@@ -118,6 +130,8 @@ def generate_text(input_text, prompt_template=None, max_length=None, temperature
             max_length=max_length,
             temperature=temperature,
             top_p=top_p,
+            do_sample=True,  # 啟用採樣，使回答更多樣化
+            num_return_sequences=1  # 只返回一個回答
         )
         
         # Decode the generated text
@@ -136,10 +150,15 @@ def generate_text(input_text, prompt_template=None, max_length=None, temperature
                 assistant_response = generated_text
         
         # 清除提示中的指令
+        assistant_response = assistant_response.replace("請用一句簡短的對話語氣回答，不要超過二十個字。", "")
         assistant_response = assistant_response.replace("請用簡短的一兩句話回答，像對話一樣。", "")
         
         # 提取第一個完整句子作為回答
         first_sentence = extract_first_sentence(assistant_response)
+        
+        # 確保回答簡短
+        if len(first_sentence) < 5:  # 處理太短的回答
+            return extract_first_sentence(assistant_response[:50])
         
         return first_sentence
     
