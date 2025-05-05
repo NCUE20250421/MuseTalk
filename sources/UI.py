@@ -4,9 +4,9 @@
 import os
 import gradio as gr
 import tempfile
-from llm_module import generate_text
-from tts_module import text_to_speech, get_taiwanese_voices
-from video_module import generate_video, preload_models
+from sources.llm_module import generate_text
+from sources.tts_module import text_to_speech, get_taiwanese_voices
+from sources.video_module import generate_video, preload_models
 import time
 import datetime
 

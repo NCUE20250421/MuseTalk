@@ -5,9 +5,9 @@ import os
 import argparse
 import time
 import datetime
-from llm_module import generate_text, get_model_and_tokenizer
-from tts_module import text_to_speech, get_taiwanese_voices
-from video_module import generate_video, preload_models
+from sources.llm_module import generate_text, get_model_and_tokenizer
+from sources.tts_module import text_to_speech, get_taiwanese_voices
+from sources.video_module import generate_video, preload_models
 
 def format_time(seconds):
     """將秒數格式化為易讀的時間格式"""
