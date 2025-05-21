@@ -1,41 +1,35 @@
-# main.py
-# This script integrates the LLM, TTS, and video generation modules to create a complete pipeline.
-
 import os
+import sys
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import argparse
 import time
 import datetime
-from sources.llm_module import generate_text, get_model_and_tokenizer
-from sources.tts_module import text_to_speech, get_taiwanese_voices
-from sources.video_module import generate_video, preload_models
+from llm_module import generate_text, get_model_and_tokenizer
+from tts_module import text_to_speech
+from video_module import generate_video, preload_models
 
 def format_time(seconds):
     """將秒數格式化為易讀的時間格式"""
     return str(datetime.timedelta(seconds=round(seconds)))
 
 def preload_all_models(args):
-    """
-    預載入所有模型，包括 LLM、TTS 和 MuseTalk 模型，避免每次處理時重新載入
-    
-    Args:
-        args: 命令行參數
-        
-    Returns:
-        dict: 包含預載入模型的狀態和耗時信息
-    """
+    """預載入所有需要的模型"""
     preload_stats = {
         "llm": {"loaded": False, "time": 0},
-        "musetalk": {"loaded": False, "time": 0},
+        "musetalk": {"loaded": False, "time": 0}
     }
     
-    print("預載入所有模型中...")
-    
     # 1. 預載入 LLM 模型
-    print("1. 載入大語言模型 (LLM)...")
+    print("1. 載入 LLM 模型...")
     llm_start_time = time.time()
     try:
         tokenizer, model = get_model_and_tokenizer()
-        if tokenizer is not None and model is not None:
+        if tokenizer and model:
             preload_stats["llm"]["loaded"] = True
             print("   ✓ LLM 模型載入成功")
         else:

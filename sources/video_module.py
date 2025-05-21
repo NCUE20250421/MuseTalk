@@ -3,6 +3,12 @@
 
 import os
 import sys
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import subprocess
 import yaml
 import tempfile
@@ -316,11 +322,11 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
         from musetalk.utils.utils import datagen
         from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs
         from musetalk.utils.blending import get_image_prepare_material, get_image_blending
-        
+
         # 創建輸出目錄
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        # 獲取預加載的模型和配置
+        # Get preloaded models and configs
         device = global_models["device"]
         vae = global_models["vae"]
         unet = global_models["unet"]
@@ -329,24 +335,42 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
         audio_processor = global_models["audio_processor"]
         fp = global_models["face_parser"]
         weight_dtype = global_models["weight_dtype"]
+
+        # Empty CUDA cache before starting
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
-        # 設置時間步長
-        timesteps = torch.tensor([0], device=device)
+        # Set timesteps with proper device and dtype
+        timesteps = torch.tensor([0], device=device, dtype=weight_dtype)
         
         print("Extracting audio features...")
-        whisper_input_features, librosa_length = audio_processor.get_audio_feature(audio_file, weight_dtype=weight_dtype)
-        whisper_chunks = audio_processor.get_whisper_chunk(
-            whisper_input_features,
-            device,
-            weight_dtype,
-            whisper,
-            librosa_length,
-            fps=fps,
-            audio_padding_length_left=2,
-            audio_padding_length_right=2,
+        whisper_input_features, librosa_length = audio_processor.get_audio_feature(
+            audio_file, 
+            weight_dtype=weight_dtype
         )
         
-        # 處理輸入圖像
+        try:
+            whisper_chunks = audio_processor.get_whisper_chunk(
+                whisper_input_features,
+                device,
+                weight_dtype,
+                whisper,
+                librosa_length,
+                fps=fps,
+                audio_padding_length_left=2,
+                audio_padding_length_right=2
+            )
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                # Try again with smaller batch size
+                batch_size = max(1, batch_size // 2)
+                print(f"Reduced batch size to {batch_size} due to memory constraints")
+            else:
+                raise e
+
+        # Process input images
         print("Processing input images...")
         if os.path.isfile(video_path):
             input_img_list = [video_path]
@@ -355,39 +379,49 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
                              if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
             if not input_img_list:
                 raise ValueError(f"No image files found in directory: {video_path}")
-        
-        # 獲取人臉關鍵點和邊界框
+
+        # Get face landmarks and bounding boxes
         print("Detecting face landmarks...")
         coord_list, frame_list = get_landmark_and_bbox(input_img_list, bbox_shift)
         
-        # 處理圖像框
+        # Process frames
         print("Processing frames...")
         input_latent_list = []
+        
         for idx, (bbox, frame) in enumerate(zip(coord_list, frame_list)):
-            # 跳過無效的邊界框
-            if bbox == (0.0, 0.0, 0.0, 0.0):
+            if bbox == (0.0, 0.0, 0.0, 0.0):  # Skip invalid bounding boxes
                 continue
-            
+                
             x1, y1, x2, y2 = bbox
-            # 添加額外邊距
             y2 = y2 + extra_margin
             y2 = min(y2, frame.shape[0])
-            coord_list[idx] = [x1, y1, x2, y2]  # 更新 bbox
-            
-            # 裁剪並調整大小
-            crop_frame = frame[y1:y2, x1:x2]
-            resized_crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
-            
-            # 獲取潛在表示
-            latents = vae.get_latents_for_unet(resized_crop_frame)
-            input_latent_list.append(latents)
-        
-        # 為平滑過渡，添加反向順序的框
+            coord_list[idx] = [x1, y1, x2, y2]  # Update bbox
+
+            try:
+                # Crop and resize frame
+                crop_frame = frame[y1:y2, x1:x2]
+                resized_crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
+                
+                # Get latent representation with error handling
+                with torch.cuda.amp.autocast(enabled=weight_dtype==torch.float16):
+                    latents = vae.get_latents_for_unet(resized_crop_frame)
+                input_latent_list.append(latents)
+                
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    continue
+                else:
+                    raise e
+
+        # Add reverse order frames for smooth transition
         input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
         
-        # 生成視頻幀
+        # Generate video frames
         video_num = len(whisper_chunks)
         print(f"Generating {video_num} frames...")
+        
         gen = datagen(
             whisper_chunks=whisper_chunks,
             vae_encode_latents=input_latent_list_cycle,
@@ -395,14 +429,14 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
             device=device
         )
         
-        # 創建臨時目錄存放中間結果
+        # Create temporary directory for intermediate results
         temp_dir = tempfile.mkdtemp()
         try:
-            # 處理生成的幀
+            # Process generated frames
             mask_list = []
             mask_coords_list = []
             
-            # 為每個輸入幀準備遮罩
+            # Prepare masks for each input frame
             for i, frame in enumerate(frame_list):
                 x1, y1, x2, y2 = coord_list[i]
                 mask, crop_box = get_image_prepare_material(
@@ -411,54 +445,67 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
                 mask_list.append(mask)
                 mask_coords_list.append(crop_box)
             
-            # 循環處理生成的幀
-            result_frames = []
+            # Process frames in batches
             idx = 0
-            
             for whisper_batch, latent_batch in tqdm(gen):
-                audio_feature_batch = pe(whisper_batch.to(device))
-                latent_batch = latent_batch.to(dtype=unet.model.dtype, device=device)
-                
-                # 預測潛在表示
-                pred_latents = unet.model(
-                    latent_batch, 
-                    timesteps, 
-                    encoder_hidden_states=audio_feature_batch
-                ).sample
-                
-                # 解碼潛在表示為圖像
-                recon_frames = vae.decode_latents(pred_latents)
-                
-                # 將生成的幀與原始幀混合
-                for res_frame in recon_frames:
-                    bbox = coord_list[idx % len(coord_list)]
-                    ori_frame = frame_list[idx % len(frame_list)].copy()
-                    x1, y1, x2, y2 = bbox
-                    
-                    # 調整大小
-                    res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
-                    
-                    mask = mask_list[idx % len(mask_list)]
-                    mask_crop_box = mask_coords_list[idx % len(mask_coords_list)]
-                    
-                    # 混合幀
-                    combine_frame = get_image_blending(
-                        ori_frame, res_frame, bbox, mask, mask_crop_box
-                    )
-                    
-                    result_frames.append(combine_frame)
-                    
-                    # 保存中間幀
-                    cv2.imwrite(
-                        os.path.join(temp_dir, f"{idx:08d}.png"), 
-                        combine_frame
-                    )
-                    
-                    idx += 1
-            
-            # 使用 OpenCV VideoWriter 保存視頻
+                try:
+                    with torch.cuda.amp.autocast(enabled=weight_dtype==torch.float16):
+                        # Process audio features
+                        audio_feature_batch = pe(whisper_batch.to(device))
+                        latent_batch = latent_batch.to(dtype=unet.model.dtype, device=device)
+                        
+                        # Generate latent predictions
+                        pred_latents = unet.model(
+                            latent_batch, 
+                            timesteps, 
+                            encoder_hidden_states=audio_feature_batch
+                        ).sample
+                        
+                        # Decode latents to images
+                        recon_frames = vae.decode_latents(pred_latents)
+                        
+                    # Blend generated frames with original frames
+                    for res_frame in recon_frames:
+                        bbox = coord_list[idx % len(coord_list)]
+                        ori_frame = frame_list[idx % len(frame_list)].copy()
+                        x1, y1, x2, y2 = bbox
+                        
+                        try:
+                            # Resize frame
+                            res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
+                            
+                            # Get mask and crop box
+                            mask = mask_list[idx % len(mask_list)]
+                            mask_crop_box = mask_coords_list[idx % len(mask_coords_list)]
+                            
+                            # Blend frames
+                            combine_frame = get_image_blending(
+                                ori_frame, res_frame, bbox, mask, mask_crop_box
+                            )
+                            
+                            # Save intermediate frame
+                            cv2.imwrite(
+                                os.path.join(temp_dir, f"{idx:08d}.png"), 
+                                combine_frame
+                            )
+                            
+                            idx += 1
+                            
+                        except Exception as e:
+                            print(f"Error processing frame {idx}: {str(e)}")
+                            continue
+                            
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        continue
+                    else:
+                        raise e
+
+            # Save video using OpenCV VideoWriter
             print(f"Saving video to {output_path}...")
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 或使用 'avc1'
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(
                 os.path.join(temp_dir, "temp_video.mp4"), 
                 fourcc, 
@@ -468,11 +515,12 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
             
             for frame_path in sorted(glob.glob(os.path.join(temp_dir, "*.png"))):
                 frame = cv2.imread(frame_path)
-                out.write(frame)
+                if frame is not None:
+                    out.write(frame)
             
             out.release()
             
-            # 使用 FFmpeg 添加音頻
+            # Add audio using FFmpeg
             ffmpeg_path = get_ffmpeg_path()
             ffmpeg_cmd = "ffmpeg"
             if ffmpeg_path:
@@ -493,15 +541,17 @@ def _generate_video_with_preloaded_models(audio_file, video_path, bbox_shift=0, 
             subprocess.run(cmd, check=True)
             print(f"Video generation completed successfully: {output_path}")
             return output_path
-        
+            
         finally:
-            # 清理臨時文件
+            # Clean up temporary files
             import shutil
             shutil.rmtree(temp_dir)
     
     except Exception as e:
         print(f"Error in video generation with preloaded models: {str(e)}")
-        raise
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        raise e
 
 def get_ffmpeg_path():
     """Attempts to find the ffmpeg executable path"""
